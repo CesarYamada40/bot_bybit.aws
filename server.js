@@ -1,22 +1,11 @@
-// server.js - Express server to serve build (dist/) and proxy Bybit API
-const express = require('express');
-const path = require('path');
-const process = require('process');
-
-const app = express();
-const port = process.env.PORT || 3000;
-
-app.use(express.json());
-
-// Temporarily add this route BEFORE the static + SPA fallback to enable a read-only Bybit Testnet check.
-// Remove this route immediately after verification.
-app.get('/bybit-auth-test', async (req, res) => {
+// Debug route — NÃO deixar em produção permanente.
+// Coloque este bloco ANTES do bloco que define distDir / app.use(express.static(distDir)).
+app.get('/bybit-auth-debug', async (req, res) => {
   try {
     const apiKey = process.env.BYBIT_KEY;
     const apiSecret = process.env.BYBIT_SECRET;
     if (!apiKey || !apiSecret) return res.status(400).json({ ok: false, error: 'BYBIT_KEY or BYBIT_SECRET not configured on server.' });
 
-    // Bybit v5 signature: timestamp + method + requestPath + body
     const timestamp = Date.now().toString();
     const method = 'GET';
     const requestPath = '/v5/account/wallet-balance';
@@ -27,7 +16,7 @@ app.get('/bybit-auth-test', async (req, res) => {
     const url = `https://api-testnet.bybit.com${requestPath}`;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 10000);
 
     const response = await fetch(url, {
       method,
@@ -43,49 +32,26 @@ app.get('/bybit-auth-test', async (req, res) => {
 
     clearTimeout(timeout);
 
-    const text = await response.text();
-    let data;
-    try { data = JSON.parse(text); } catch (e) { data = { raw: text }; }
+    const status = response.status;
+    const statusText = response.statusText;
+    // capture headers as plain object (safe)
+    const hdrs = {};
+    for (const [k, v] of response.headers.entries()) hdrs[k] = v;
 
-    const maskedKey = apiKey.length > 8 ? `${apiKey.slice(0,4)}...${apiKey.slice(-4)}` : '****';
-    return res.status(response.ok ? 200 : 502).json({ ok: response.ok, key_masked: maskedKey, bybit_response: data });
+    const text = await response.text();
+
+    // Return debug info (no secrets). Do NOT leave this endpoint public permanently.
+    return res.status(200).json({
+      ok: response.ok,
+      httpStatus: status,
+      httpStatusText: statusText,
+      bybit_url: url,
+      response_headers: hdrs,
+      response_body_raw: text === '' ? '(empty string)' : text
+    });
   } catch (err) {
     const msg = (err && err.name === 'AbortError') ? 'Gateway Timeout: Bybit timed out' : (err instanceof Error ? err.message : String(err));
     return res.status(502).json({ ok: false, error: msg });
-  }
-});
-
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
-
-// Proxy público de mercado (já existente)
-app.get('/api/bybit-proxy', async (req, res) => {
-  try {
-    const symbol = req.query.symbol;
-    let url = 'https://api.bybit.com/v5/market/tickers?category=linear';
-    if (symbol) url += `&symbol=${encodeURIComponent(String(symbol))}`;
-
-    // Timeout logic
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: { 'User-Agent': 'TradingBotDashboard/1.0', 'Accept': 'application/json' },
-      signal: controller.signal
-    });
-
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      const body = await response.text();
-      return res.status(response.status).json({ message: `Bybit returned ${response.status}`, details: body });
-    }
-
-    const data = await response.json();
-    return res.status(200).json(data);
-  } catch (err) {
-    const msg = (err && err.name === 'AbortError') ? 'Gateway Timeout: Bybit timed out' : (err instanceof Error ? err.message : String(err));
-    return res.status(502).json({ message: 'Failed to contact Bybit API', details: msg });
   }
 });
 
