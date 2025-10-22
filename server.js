@@ -1,4 +1,14 @@
-// Debug route — NÃO deixar em produção permanente.
+// server.js - Express server to serve build (dist/) and proxy Bybit API
+const express = require('express');
+const path = require('path');
+const process = require('process');
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.use(express.json());
+
+// Debug route — NÃO deixar em produção permanentemente.
 // Coloque este bloco ANTES do bloco que define distDir / app.use(express.static(distDir)).
 app.get('/bybit-auth-debug', async (req, res) => {
   try {
@@ -34,13 +44,10 @@ app.get('/bybit-auth-debug', async (req, res) => {
 
     const status = response.status;
     const statusText = response.statusText;
-    // capture headers as plain object (safe)
     const hdrs = {};
     for (const [k, v] of response.headers.entries()) hdrs[k] = v;
-
     const text = await response.text();
 
-    // Return debug info (no secrets). Do NOT leave this endpoint public permanently.
     return res.status(200).json({
       ok: response.ok,
       httpStatus: status,
@@ -52,6 +59,39 @@ app.get('/bybit-auth-debug', async (req, res) => {
   } catch (err) {
     const msg = (err && err.name === 'AbortError') ? 'Gateway Timeout: Bybit timed out' : (err instanceof Error ? err.message : String(err));
     return res.status(502).json({ ok: false, error: msg });
+  }
+});
+
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+// Proxy público de mercado
+app.get('/api/bybit-proxy', async (req, res) => {
+  try {
+    const symbol = req.query.symbol;
+    let url = 'https://api.bybit.com/v5/market/tickers?category=linear';
+    if (symbol) url += `&symbol=${encodeURIComponent(String(symbol))}`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'User-Agent': 'TradingBotDashboard/1.0', 'Accept': 'application/json' },
+      signal: controller.signal
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      const body = await response.text();
+      return res.status(response.status).json({ message: `Bybit returned ${response.status}`, details: body });
+    }
+
+    const data = await response.json();
+    return res.status(200).json(data);
+  } catch (err) {
+    const msg = (err && err.name === 'AbortError') ? 'Gateway Timeout: Bybit timed out' : (err instanceof Error ? err.message : String(err));
+    return res.status(502).json({ message: 'Failed to contact Bybit API', details: msg });
   }
 });
 
