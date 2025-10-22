@@ -2,29 +2,60 @@
 const express = require('express');
 const path = require('path');
 const process = require('process');
+const fs = require('fs');
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 10000;
 
 app.use(express.json());
 
-// Debug route — NÃO deixar em produção permanentemente.
-// Coloque este bloco ANTES do bloco que define distDir / app.use(express.static(distDir)).
+// Helper to read secret from env or from /etc/secrets/<name> (if present on Render)
+function getSecretVar(name) {
+  const raw = process.env[name];
+  if (raw && raw.toString().trim()) return raw.toString().trim();
+  const filePath = `/etc/secrets/${name.toLowerCase()}`;
+  try {
+    if (fs.existsSync(filePath)) return fs.readFileSync(filePath, 'utf8').trim();
+  } catch (e) {
+    // ignore
+  }
+  return '';
+}
+
+// Safe masked display for logs (do not print secrets)
+function maskKey(k) {
+  if (!k) return '(not set)';
+  return k.length > 8 ? `${k.slice(0,4)}...${k.slice(-4)}` : '****';
+}
+
+// Debug route — TEMPORARY: returns prehash and signature for diagnosis.
+// KEEP this route placed BEFORE static serving and SPA fallback.
 app.get('/bybit-auth-debug', async (req, res) => {
   try {
-    const apiKey = process.env.BYBIT_KEY;
-    const apiSecret = process.env.BYBIT_SECRET;
+    const apiKey = getSecretVar('BYBIT_KEY');
+    const apiSecret = getSecretVar('BYBIT_SECRET');
     if (!apiKey || !apiSecret) return res.status(400).json({ ok: false, error: 'BYBIT_KEY or BYBIT_SECRET not configured on server.' });
 
+    // Required param for this endpoint
+    const params = { accountType: 'UNIFIED' }; // adjust if you need SPOT/CONTRACT
+
+    // Build request path WITH query string (IMPORTANT: include the '?' in the REQUEST_PATH used for prehash)
+    const requestPath = '/v5/account/wallet-balance';
+    const queryString = new URLSearchParams(params).toString(); // e.g. 'accountType=UNIFIED'
+    const requestPathWithQuery = queryString ? `${requestPath}?${queryString}` : requestPath;
+
+    // Prehash per Bybit v5 doc: TIMESTAMP + METHOD + REQUEST_PATH(+?query) + BODY
     const timestamp = Date.now().toString();
     const method = 'GET';
-    const requestPath = '/v5/account/wallet-balance';
-    const body = '';
-    const prehash = timestamp + method + requestPath + body;
+    const body = ''; // GET without body
+    const prehash = timestamp + method + requestPathWithQuery + body;
+
+    // Create HMAC-SHA256 hex signature
     const signature = require('crypto').createHmac('sha256', apiSecret).update(prehash).digest('hex');
 
-    const url = `https://api-testnet.bybit.com${requestPath}`;
+    const url = `https://api-testnet.bybit.com${requestPathWithQuery}`;
 
+    // Perform request with short timeout
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
 
@@ -42,16 +73,18 @@ app.get('/bybit-auth-debug', async (req, res) => {
 
     clearTimeout(timeout);
 
-    const status = response.status;
-    const statusText = response.statusText;
     const hdrs = {};
     for (const [k, v] of response.headers.entries()) hdrs[k] = v;
     const text = await response.text();
 
+    // Return prehash and signature FOR DEBUG (remove this route after diagnosis)
     return res.status(200).json({
       ok: response.ok,
-      httpStatus: status,
-      httpStatusText: statusText,
+      httpStatus: response.status,
+      httpStatusText: response.statusText,
+      prehash,
+      signature,
+      key_masked: maskKey(apiKey),
       bybit_url: url,
       response_headers: hdrs,
       response_body_raw: text === '' ? '(empty string)' : text
@@ -64,7 +97,7 @@ app.get('/bybit-auth-debug', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// Proxy público de mercado
+// Public market proxy
 app.get('/api/bybit-proxy', async (req, res) => {
   try {
     const symbol = req.query.symbol;
@@ -95,7 +128,7 @@ app.get('/api/bybit-proxy', async (req, res) => {
   }
 });
 
-// Serve static files from dist/ (build output)
+// Serve static files from dist/
 const distDir = path.join(process.cwd(), 'dist');
 app.use(express.static(distDir));
 
@@ -105,5 +138,9 @@ app.get('*', (req, res) => {
     if (err) res.status(500).send('Index file not found. Run build first.');
   });
 });
+
+// Safe startup logs (do NOT print secrets)
+console.log('BYBIT_KEY present?', !!getSecretVar('BYBIT_KEY'));
+console.log('BYBIT_SECRET present?', !!getSecretVar('BYBIT_SECRET'));
 
 app.listen(port, () => console.log(`Server listening on port ${port}`));
