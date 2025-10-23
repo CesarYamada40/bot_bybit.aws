@@ -44,7 +44,7 @@ app.get('/api/bybit-proxy', async (req, res) => {
   }
 });
 
-// Rota de debug para autenticação Bybit (testnet/mainnet configurable)
+// Rota de debug para autenticação Bybit (testnet/mainnet configurável)
 app.get('/bybit-auth-debug', async (req, res) => {
   try {
     const apiKey = getSecretVar('BYBIT_KEY');
@@ -61,7 +61,6 @@ app.get('/bybit-auth-debug', async (req, res) => {
 
     // Timestamp em milissegundos (string)
     const timestamp = Date.now().toString();
-    // Use nomes que não conflitem com globals/middlewares
     const httpMethod = 'GET';
     const endpointPath = '/v5/account/wallet-balance';
 
