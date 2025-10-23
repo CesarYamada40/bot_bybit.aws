@@ -35,7 +35,7 @@ function App() {
     setError(null);
     setLoading(true);
     try {
-      const r = await fetch('/bybit-auth-test');
+      const r = await fetch('/bybit-auth-debug');
       setAuthTest(await r.json());
     } catch (e: any) {
       setAuthTest({ error: e.message || String(e) });
@@ -68,7 +68,7 @@ function App() {
         <h3>/api/bybit-proxy?symbol=BTCUSDT</h3>
         <pre style={{ background: '#f5f5f5', padding: 10 }}>{ticker ? JSON.stringify(ticker, null, 2) : '— não consultado —'}</pre>
 
-        <h3>/bybit-auth-test</h3>
+        <h3>/bybit-auth-debug</h3>
         <pre style={{ background: '#f5f5f5', padding: 10 }}>{authTest ? JSON.stringify(authTest, null, 2) : '— não consultado —'}</pre>
       </div>
 
