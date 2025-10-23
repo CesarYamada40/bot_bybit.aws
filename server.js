@@ -76,9 +76,9 @@ app.get('/bybit-auth-debug', async (req, res) => {
     const queryString = new URLSearchParams(params).toString();
 
     // String para assinar: timestamp + método + caminho + queryString
-    const prehash = timestamp + httpMethod + endpointPath + queryString;
-
-    // Debug logs (ativos somente se DEBUG_BYBIT=true no env)
+const prehash = `${timestamp}${httpMethod}${endpointPath}${queryString}`;
+    
+      // Debug logs (ativos somente se DEBUG_BYBIT=true no env)
     const debugEnabled = process.env.DEBUG_BYBIT === 'true';
     if (debugEnabled) {
       console.log('httpMethod:', httpMethod);
