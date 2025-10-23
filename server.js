@@ -30,6 +30,9 @@ function maskKey(k) {
 
 // Debug route — TEMPORARY: returns prehash and signature for diagnosis.
 app.get('/bybit-auth-debug', async (req, res) => {
+  // Variables for debug info
+  let prehash, signature;
+  
   try {
     const apiKey = getSecretVar('BYBIT_KEY');
     const apiSecret = getSecretVar('BYBIT_SECRET');
@@ -46,10 +49,10 @@ app.get('/bybit-auth-debug', async (req, res) => {
     // Build prehash: timestamp + httpMethod + endpointPath + queryString (no '?')
     const timestamp = Date.now().toString();
     const httpMethod = 'GET';
-    const prehash = timestamp + httpMethod + endpointPath + queryString;
+    prehash = timestamp + httpMethod + endpointPath + queryString;
 
     // Create HMAC-SHA256 hex signature
-    const signature = require('crypto').createHmac('sha256', apiSecret).update(prehash).digest('hex');
+    signature = require('crypto').createHmac('sha256', apiSecret).update(prehash).digest('hex');
 
     // Get base URL from env var, default to testnet
     const baseUrl = getSecretVar('BYBIT_BASE_URL') || 'https://api-testnet.bybit.com';
@@ -107,7 +110,17 @@ app.get('/bybit-auth-debug', async (req, res) => {
     return res.status(200).json(responseData);
   } catch (err) {
     const msg = (err && err.name === 'AbortError') ? 'Gateway Timeout: Bybit timed out' : (err instanceof Error ? err.message : String(err));
-    return res.status(502).json({ ok: false, error: msg });
+    
+    // Include debug info in error response if DEBUG_BYBIT is enabled
+    const debugMode = getSecretVar('DEBUG_BYBIT') === 'true';
+    const errorResponse = { ok: false, error: msg };
+    
+    if (debugMode && prehash && signature) {
+      errorResponse.prehash = prehash;
+      errorResponse.signature = signature;
+    }
+    
+    return res.status(502).json(errorResponse);
   }
 });
 
