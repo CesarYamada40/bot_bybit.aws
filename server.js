@@ -35,7 +35,7 @@ app.get('/health', (req, res) => {
 app.get('/api/bybit-proxy', async (req, res) => {
   try {
     const symbol = req.query.symbol || 'BTCUSDT';
-    const url = `https://api-testnet.bybit.com/v5/market/tickers?category=linear&symbol=${encodeURIComponent(symbol)}`;
+    const url = `https://api.bybit.com/v5/market/tickers?category=linear&symbol=${encodeURIComponent(symbol)}`;
     const r = await fetch(url);
     const json = await r.json();
     res.status(r.status).json(json);
@@ -61,7 +61,6 @@ app.get('/bybit-auth-debug', async (req, res) => {
 
     // Timestamp em milissegundos (string)
     const timestamp = Date.now().toString();
-
     // Use nomes que não conflitem com globals/middlewares
     const httpMethod = 'GET';
     const endpointPath = '/v5/account/wallet-balance';
@@ -75,7 +74,7 @@ app.get('/bybit-auth-debug', async (req, res) => {
     // Construir queryString
     const queryString = new URLSearchParams(params).toString(); // e.g. accountType=UNIFIED
 
-    // String para assinar: timestamp + método + caminho + queryString
+    // String para assinar: timestamp + método + caminho + queryString (SEM '?')
     const prehash = timestamp + httpMethod + endpointPath + (queryString ? queryString : '');
 
     // Debug logs (ativos somente se DEBUG_BYBIT=true no env)
