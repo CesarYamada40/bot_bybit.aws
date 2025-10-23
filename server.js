@@ -44,7 +44,7 @@ app.get('/api/bybit-proxy', async (req, res) => {
   }
 });
 
-// Rota de debug para autenticação Bybit (testnet)
+// Rota de debug para autenticação Bybit (testnet/mainnet configurable)
 app.get('/bybit-auth-debug', async (req, res) => {
   try {
     const apiKey = getSecretVar('BYBIT_KEY');
@@ -61,34 +61,41 @@ app.get('/bybit-auth-debug', async (req, res) => {
 
     // Timestamp em milissegundos (string)
     const timestamp = Date.now().toString();
-    const method = 'GET';
-    const requestPath = '/v5/account/wallet-balance';
+
+    // Use nomes que não conflitem com globals/middlewares
+    const httpMethod = 'GET';
+    const endpointPath = '/v5/account/wallet-balance';
+
+    // Allow overriding accountType via query param for testing (UNIFIED by default)
+    const accountType = (req.query.accountType && String(req.query.accountType).toUpperCase()) || 'UNIFIED';
 
     // Parâmetros obrigatórios (NUNCA incluir timestamp na query string usada para assinar)
-    const params = {
-      accountType: 'UNIFIED'
-    };
+    const params = { accountType };
 
-    // Construir queryString (ordenada por URLSearchParams)
+    // Construir queryString
     const queryString = new URLSearchParams(params).toString(); // e.g. accountType=UNIFIED
 
-    // String para assinar: timestamp + method + path + queryString
-    // Se não houver queryString, assinar sem ela (concatenando vazio)
-    const prehash = timestamp + method + requestPath + (queryString ? queryString : '');
+    // String para assinar: timestamp + método + caminho + queryString
+    const prehash = timestamp + httpMethod + endpointPath + (queryString ? queryString : '');
 
-    // Opcional: log para depuração (remova em produção)
-    // console.log('String para assinar:', prehash);
+    // Debug logs (ativos somente se DEBUG_BYBIT=true no env)
+    const debugEnabled = process.env.DEBUG_BYBIT === 'true';
+    if (debugEnabled) {
+      console.log('httpMethod:', httpMethod);
+      console.log('endpointPath:', endpointPath);
+      console.log('prehash:', prehash);
+    }
 
     // Gerar assinatura HMAC-SHA256 hex
     const signature = crypto.createHmac('sha256', apiSecret).update(prehash).digest('hex');
 
-    // Escolher URL (testnet) - ajuste conforme ambiente se quiser mainnet
-    const baseUrl = 'https://api-testnet.bybit.com';
-    const url = `${baseUrl}${requestPath}?${queryString}`;
+    // Escolher URL (testnet por padrão, pode ser sobrescrito com BYBIT_BASE_URL)
+    const baseUrl = process.env.BYBIT_BASE_URL || 'https://api-testnet.bybit.com';
+    const url = `${baseUrl}${endpointPath}?${queryString}`;
 
     // Fazer a requisição ao Bybit
     const response = await fetch(url, {
-      method,
+      method: httpMethod,
       headers: {
         'Content-Type': 'application/json',
         'X-BAPI-API-KEY': apiKey,
@@ -98,24 +105,25 @@ app.get('/bybit-auth-debug', async (req, res) => {
       }
     });
 
-    const data = await response.text().catch(() => null);
+    const dataText = await response.text().catch(() => null);
     let parsed;
     try {
-      parsed = data ? JSON.parse(data) : null;
+      parsed = dataText ? JSON.parse(dataText) : null;
     } catch (e) {
-      // se Bybit retornou HTML ou texto, manter raw
-      parsed = { raw: data };
+      parsed = { raw: dataText };
     }
 
-    return res.status(200).json({
+    // Only include sensitive debug fields when DEBUG_BYBIT=true
+    const debugFields = debugEnabled ? { signed_string: prehash, signature } : {};
+
+    return res.status(200).json(Object.assign({
       ok: response.ok,
       httpStatus: response.status,
       key_masked: maskKey(apiKey),
       bybit_url: url,
-      signed_string: prehash, // útil para debug — remova em produção
-      signature,
+      accountType,
       response: parsed
-    });
+    }, debugFields));
   } catch (err) {
     return res.status(502).json({
       ok: false,
