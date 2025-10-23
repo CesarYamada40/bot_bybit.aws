@@ -1,19 +1,17 @@
-// server.js - Express server to serve build (dist/) and proxy Bybit API
 const express = require('express');
-const path = require('path');
-const process = require('process');
+const crypto = require('crypto');
 const fs = require('fs');
+const path = require('path');
+const fetch = global.fetch || require('node-fetch');
 
 const app = express();
-const port = process.env.PORT || 10000;
-
 app.use(express.json());
 
-// Helper to read secret from env or from /etc/secrets/<name> (if present on Render)
+// Função para obter variáveis de ambiente (ou de arquivo de secrets)
 function getSecretVar(name) {
   const raw = process.env[name];
   if (raw && raw.toString().trim()) return raw.toString().trim();
-  const filePath = `/etc/secrets/${name.toLowerCase()}`;
+  const filePath = path.join('/etc/secrets', name.toLowerCase());
   try {
     if (fs.existsSync(filePath)) return fs.readFileSync(filePath, 'utf8').trim();
   } catch (e) {
@@ -22,7 +20,7 @@ function getSecretVar(name) {
   return '';
 }
 
-// Safe masked display for logs (do not print secrets)
+// Função para mascarar chaves em logs/resposta
 function maskKey(k) {
   if (!k) return '(not set)';
   return k.length > 8 ? `${k.slice(0,4)}...${k.slice(-4)}` : '****';
@@ -36,7 +34,6 @@ app.get('/bybit-auth-debug', async (req, res) => {
   try {
     const apiKey = getSecretVar('BYBIT_KEY');
     const apiSecret = getSecretVar('BYBIT_SECRET');
-    if (!apiKey || !apiSecret) return res.status(400).json({ ok: false, error: 'BYBIT_KEY or BYBIT_SECRET not configured on server.' });
 
     // Allow accountType override via query param, default to UNIFIED
     const accountType = req.query.accountType || 'UNIFIED';
@@ -69,9 +66,11 @@ app.get('/bybit-auth-debug', async (req, res) => {
       console.log('[DEBUG] Signature:', signature);
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    // Escolher URL (testnet por padrão, pode ser sobrescrito com BYBIT_BASE_URL)
+    const baseUrl = process.env.BYBIT_BASE_URL || 'https://api-testnet.bybit.com';
+    const url = `${baseUrl}${endpointPath}?${queryString}`;
 
+    // Fazer a requisição ao Bybit
     const response = await fetch(url, {
       method: httpMethod,
       headers: {
@@ -84,7 +83,13 @@ app.get('/bybit-auth-debug', async (req, res) => {
       signal: controller.signal
     });
 
-    clearTimeout(timeout);
+    const dataText = await response.text().catch(() => null);
+    let parsed;
+    try {
+      parsed = dataText ? JSON.parse(dataText) : null;
+    } catch (e) {
+      parsed = { raw: dataText };
+    }
 
     const hdrs = {};
     for (const [k, v] of response.headers.entries()) hdrs[k] = v;
@@ -142,19 +147,6 @@ app.get('/api/bybit-proxy', async (req, res) => {
       headers: { 'User-Agent': 'TradingBotDashboard/1.0', 'Accept': 'application/json' },
       signal: controller.signal
     });
-
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      const body = await response.text();
-      return res.status(response.status).json({ message: `Bybit returned ${response.status}`, details: body });
-    }
-
-    const data = await response.json();
-    return res.status(200).json(data);
-  } catch (err) {
-    const msg = (err && err.name === 'AbortError') ? 'Gateway Timeout: Bybit timed out' : (err instanceof Error ? err.message : String(err));
-    return res.status(502).json({ message: 'Failed to contact Bybit API', details: msg });
   }
 });
 
