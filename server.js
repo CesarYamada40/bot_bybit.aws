@@ -35,7 +35,7 @@ app.get('/health', (req, res) => {
 app.get('/api/bybit-proxy', async (req, res) => {
   try {
     const symbol = req.query.symbol || 'BTCUSDT';
-    const url = `https://api.bybit.com/v5/market/tickers?category=linear&symbol=${encodeURIComponent(symbol)}`;
+    const url = `https://api-testnet.bybit.com/v5/market/tickers?category=linear&symbol=${encodeURIComponent(symbol)}`;
     const r = await fetch(url);
     const json = await r.json();
     res.status(r.status).json(json);
