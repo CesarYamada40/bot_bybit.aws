@@ -75,24 +75,25 @@ app.get('/bybit-auth-debug', async (req, res) => {
     // Construir queryString
     const queryString = new URLSearchParams(params).toString();
 
-    // String para assinar: timestamp + método + caminho + queryString
-// Construção da string assinada correta
-const prehash = `${timestamp}${httpMethod}${endpointPath}${queryString}`;
+    // Declarar a string assinada
+    let prehash = `${timestamp}${httpMethod}${endpointPath}${queryString}`;
 
-// Se for necessário incluir recvWindow ou apiKey, ajuste conforme necessário:
-const recvWindow = process.env.BYBIT_RECV_WINDOW || '10000';
-const includeRecv = process.env.BYBIT_INCLUDE_RECV_WINDOW === 'true';
-const includeApiKey = process.env.BYBIT_INCLUDE_APIKEY_IN_PREHASH === 'true';
+    // Se for necessário incluir recvWindow ou apiKey, ajuste conforme necessário:
+    const recvWindow = process.env.BYBIT_RECV_WINDOW || '10000';
+    const includeRecv = process.env.BYBIT_INCLUDE_RECV_WINDOW === 'true';
+    const includeApiKey = process.env.BYBIT_INCLUDE_APIKEY_IN_PREHASH === 'true';
 
-const prehashWithRecv = `${timestamp}${httpMethod}${endpointPath}${recvWindow}${queryString}`;
-const prehashWithApiKeyRecv = `${timestamp}${apiKey}${recvWindow}${queryString}`;
+    const prehashWithRecv = `${timestamp}${httpMethod}${endpointPath}${recvWindow}${queryString}`;
+    const prehashWithApiKeyRecv = `${timestamp}${apiKey}${recvWindow}${queryString}`;
 
-// Escolher a string correta
-let prehash = prehashDefault;
-if (includeApiKey) prehash = prehashWithApiKeyRecv;
-else if (includeRecv) prehash = prehashWithRecv;
-    
-      // Debug logs (ativos somente se DEBUG_BYBIT=true no env)
+    // Atualizar a string assinada com base na configuração
+    if (includeApiKey) {
+      prehash = prehashWithApiKeyRecv;
+    } else if (includeRecv) {
+      prehash = prehashWithRecv;
+    }
+
+    // Debug logs (ativos somente se DEBUG_BYBIT=true no env)
     const debugEnabled = process.env.DEBUG_BYBIT === 'true';
     if (debugEnabled) {
       console.log('httpMethod:', httpMethod);
