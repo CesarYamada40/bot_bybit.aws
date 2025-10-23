@@ -31,11 +31,11 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Exemplo de proxy público (mantém o comportamento existente)
+// Proxy público (CORRIGIDO para testnet)
 app.get('/api/bybit-proxy', async (req, res) => {
   try {
     const symbol = req.query.symbol || 'BTCUSDT';
-    const url = `https://api.bybit.com/v5/market/tickers?category=linear&symbol=${encodeURIComponent(symbol)}`;
+    const url = `https://api-testnet.bybit.com/v5/market/tickers?category=linear&symbol=${encodeURIComponent(symbol)}`;
     const r = await fetch(url);
     const json = await r.json();
     res.status(r.status).json(json);
@@ -61,52 +61,49 @@ app.get('/bybit-auth-debug', async (req, res) => {
 
     // Timestamp em milissegundos (string)
     const timestamp = Date.now().toString();
-    // Use nomes que não conflitem com globals/middlewares
+    
+    // Valores hardcoded para evitar sobrescrita
     const httpMethod = 'GET';
     const endpointPath = '/v5/account/wallet-balance';
 
     // Allow overriding accountType via query param for testing (UNIFIED by default)
     const accountType = (req.query.accountType && String(req.query.accountType).toUpperCase()) || 'UNIFIED';
 
-    // Parâmetros obrigatórios (NUNCA incluir timestamp na query string usada para assinar)
+    // Parâmetros obrigatórios
     const params = { accountType };
 
     // Construir queryString
-    const queryString = new URLSearchParams(params).toString(); // e.g. accountType=UNIFIED
+    const queryString = new URLSearchParams(params).toString();
 
-    // Optional: include recvWindow or apiKey in the prehash if requested (some Bybit setups require variants)
-    const recvWindow = process.env.BYBIT_RECV_WINDOW || '10000';
-    const includeRecv = process.env.BYBIT_INCLUDE_RECV_WINDOW === 'true';
-    const includeApiKey = process.env.BYBIT_INCLUDE_APIKEY_IN_PREHASH === 'true';
+    // String para assinar: timestamp + método + caminho + queryString
+// Construção da string assinada correta
+const prehash = `${timestamp}${httpMethod}${endpointPath}${queryString}`;
 
-    // String para assinar (variações)
-    const prehashDefault = timestamp + httpMethod + endpointPath + (queryString ? queryString : '');
-    const prehashWithRecv = timestamp + httpMethod + endpointPath + recvWindow + (queryString ? queryString : '');
-    const prehashWithApiKeyRecv = timestamp + apiKey + recvWindow + (queryString ? queryString : '');
+// Se for necessário incluir recvWindow ou apiKey, ajuste conforme necessário:
+const recvWindow = process.env.BYBIT_RECV_WINDOW || '10000';
+const includeRecv = process.env.BYBIT_INCLUDE_RECV_WINDOW === 'true';
+const includeApiKey = process.env.BYBIT_INCLUDE_APIKEY_IN_PREHASH === 'true';
 
-    // Decide which prehash to use (apiKey variant has priority if enabled)
-    let prehash = prehashDefault;
-    if (includeApiKey) prehash = prehashWithApiKeyRecv;
-    else if (includeRecv) prehash = prehashWithRecv;
+const prehashWithRecv = `${timestamp}${httpMethod}${endpointPath}${recvWindow}${queryString}`;
+const prehashWithApiKeyRecv = `${timestamp}${apiKey}${recvWindow}${queryString}`;
 
-    // Debug logs (ativos somente se DEBUG_BYBIT=true no env)
+// Escolher a string correta
+let prehash = prehashDefault;
+if (includeApiKey) prehash = prehashWithApiKeyRecv;
+else if (includeRecv) prehash = prehashWithRecv;
+    
+      // Debug logs (ativos somente se DEBUG_BYBIT=true no env)
     const debugEnabled = process.env.DEBUG_BYBIT === 'true';
     if (debugEnabled) {
       console.log('httpMethod:', httpMethod);
       console.log('endpointPath:', endpointPath);
-      console.log('includeApiKey:', includeApiKey);
-      console.log('includeRecv:', includeRecv);
-      console.log('recvWindow:', recvWindow);
-      console.log('prehashDefault:', prehashDefault);
-      console.log('prehashWithRecv:', prehashWithRecv);
-      console.log('prehashWithApiKeyRecv:', prehashWithApiKeyRecv);
-      console.log('using prehash:', prehash);
+      console.log('prehash:', prehash);
     }
 
     // Gerar assinatura HMAC-SHA256 hex
     const signature = crypto.createHmac('sha256', apiSecret).update(prehash).digest('hex');
 
-    // Escolher URL (testnet por padrão, pode ser sobrescrito com BYBIT_BASE_URL)
+    // CORREÇÃO: Renomeado para bybitBaseUrl para evitar conflito
     const bybitBaseUrl = process.env.BYBIT_BASE_URL || 'https://api-testnet.bybit.com';
     const url = `${bybitBaseUrl}${endpointPath}?${queryString}`;
 
@@ -118,7 +115,7 @@ app.get('/bybit-auth-debug', async (req, res) => {
         'X-BAPI-API-KEY': apiKey,
         'X-BAPI-SIGN': signature,
         'X-BAPI-TIMESTAMP': timestamp,
-        'X-BAPI-RECV-WINDOW': recvWindow
+        'X-BAPI-RECV-WINDOW': '10000'
       }
     });
 
