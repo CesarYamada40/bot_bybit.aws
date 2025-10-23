@@ -50,7 +50,7 @@ app.get('/bybit-auth-debug', async (req, res) => {
     // Create HMAC-SHA256 hex signature
     const signature = require('crypto').createHmac('sha256', apiSecret).update(prehash).digest('hex');
 
-    // CORREÇÃO: Construir URL com o '?' 
+    // CORRECTION: Build URL with the '?'
     const url = `https://api-testnet.bybit.com${requestPath}?${queryString}`;
 
     // CORREÇÃO: Timeout aumentado para 10 segundos
