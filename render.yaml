@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: bot-bybit
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: BYBIT_KEY
+        sync: false
+      - key: BYBIT_SECRET
+        sync: false
