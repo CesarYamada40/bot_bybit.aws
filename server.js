@@ -1,19 +1,17 @@
-// server.js - Express server to serve build (dist/) and proxy Bybit API
 const express = require('express');
-const path = require('path');
-const process = require('process');
+const crypto = require('crypto');
 const fs = require('fs');
+const path = require('path');
+const fetch = global.fetch || require('node-fetch');
 
 const app = express();
-const port = process.env.PORT || 10000;
-
 app.use(express.json());
 
-// Helper to read secret from env or from /etc/secrets/<name> (if present on Render)
+// Função para obter variáveis de ambiente (ou de arquivo de secrets)
 function getSecretVar(name) {
   const raw = process.env[name];
   if (raw && raw.toString().trim()) return raw.toString().trim();
-  const filePath = `/etc/secrets/${name.toLowerCase()}`;
+  const filePath = path.join('/etc/secrets', name.toLowerCase());
   try {
     if (fs.existsSync(filePath)) return fs.readFileSync(filePath, 'utf8').trim();
   } catch (e) {
@@ -22,114 +20,138 @@ function getSecretVar(name) {
   return '';
 }
 
-// Safe masked display for logs (do not print secrets)
+// Função para mascarar chaves em logs/resposta
 function maskKey(k) {
   if (!k) return '(not set)';
   return k.length > 8 ? `${k.slice(0,4)}...${k.slice(-4)}` : '****';
 }
 
-// Debug route — NÃO deixar em produção permanentemente.
-// This route must be placed before static serving and SPA fallback.
+// Health
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// Exemplo de proxy público (mantém o comportamento existente)
+app.get('/api/bybit-proxy', async (req, res) => {
+  try {
+    const symbol = req.query.symbol || 'BTCUSDT';
+    const url = `https://api.bybit.com/v5/market/tickers?category=linear&symbol=${encodeURIComponent(symbol)}`;
+    const r = await fetch(url);
+    const json = await r.json();
+    res.status(r.status).json(json);
+  } catch (err) {
+    res.status(502).json({ ok: false, error: String(err) });
+  }
+});
+
+// Rota de debug para autenticação Bybit (testnet/mainnet configurable)
 app.get('/bybit-auth-debug', async (req, res) => {
   try {
     const apiKey = getSecretVar('BYBIT_KEY');
     const apiSecret = getSecretVar('BYBIT_SECRET');
-    if (!apiKey || !apiSecret) return res.status(400).json({ ok: false, error: 'BYBIT_KEY or BYBIT_SECRET not configured on server.' });
 
-    // Build Bybit v5 signature
+    if (!apiKey || !apiSecret) {
+      return res.status(400).json({
+        ok: false,
+        error: 'BYBIT_KEY or BYBIT_SECRET not configured',
+        key_present: !!apiKey,
+        secret_present: !!apiSecret,
+      });
+    }
+
+    // Timestamp em milissegundos (string)
     const timestamp = Date.now().toString();
-    const method = 'GET';
-    const requestPath = '/v5/account/wallet-balance';
-    const body = '';
-    const prehash = timestamp + method + requestPath + body;
-    const signature = require('crypto').createHmac('sha256', apiSecret).update(prehash).digest('hex');
+    // Use nomes que não conflitem com globals/middlewares
+    const httpMethod = 'GET';
+    const endpointPath = '/v5/account/wallet-balance';
 
-    const url = `https://api-testnet.bybit.com${requestPath}`;
+    // Allow overriding accountType via query param for testing (UNIFIED by default)
+    const accountType = (req.query.accountType && String(req.query.accountType).toUpperCase()) || 'UNIFIED';
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    // Parâmetros obrigatórios (NUNCA incluir timestamp na query string usada para assinar)
+    const params = { accountType };
 
+    // Construir queryString
+    const queryString = new URLSearchParams(params).toString(); // e.g. accountType=UNIFIED
+
+    // Optional: include recvWindow or apiKey in the prehash if requested (some Bybit setups require variants)
+    const recvWindow = process.env.BYBIT_RECV_WINDOW || '10000';
+    const includeRecv = process.env.BYBIT_INCLUDE_RECV_WINDOW === 'true';
+    const includeApiKey = process.env.BYBIT_INCLUDE_APIKEY_IN_PREHASH === 'true';
+
+    // String para assinar (variações)
+    const prehashDefault = timestamp + httpMethod + endpointPath + (queryString ? queryString : '');
+    const prehashWithRecv = timestamp + httpMethod + endpointPath + recvWindow + (queryString ? queryString : '');
+    const prehashWithApiKeyRecv = timestamp + apiKey + recvWindow + (queryString ? queryString : '');
+
+    // Decide which prehash to use (apiKey variant has priority if enabled)
+    let prehash = prehashDefault;
+    if (includeApiKey) prehash = prehashWithApiKeyRecv;
+    else if (includeRecv) prehash = prehashWithRecv;
+
+    // Debug logs (ativos somente se DEBUG_BYBIT=true no env)
+    const debugEnabled = process.env.DEBUG_BYBIT === 'true';
+    if (debugEnabled) {
+      console.log('httpMethod:', httpMethod);
+      console.log('endpointPath:', endpointPath);
+      console.log('includeApiKey:', includeApiKey);
+      console.log('includeRecv:', includeRecv);
+      console.log('recvWindow:', recvWindow);
+      console.log('prehashDefault:', prehashDefault);
+      console.log('prehashWithRecv:', prehashWithRecv);
+      console.log('prehashWithApiKeyRecv:', prehashWithApiKeyRecv);
+      console.log('using prehash:', prehash);
+    }
+
+    // Gerar assinatura HMAC-SHA256 hex
+    const signature = crypto.createHmac('sha256', apiSecret).update(prehash).digest('hex');
+
+    // Escolher URL (testnet por padrão, pode ser sobrescrito com BYBIT_BASE_URL)
+    const baseUrl = process.env.BYBIT_BASE_URL || 'https://api-testnet.bybit.com';
+    const url = `${baseUrl}${endpointPath}?${queryString}`;
+
+    // Fazer a requisição ao Bybit
     const response = await fetch(url, {
-      method,
+      method: httpMethod,
       headers: {
         'Content-Type': 'application/json',
         'X-BAPI-API-KEY': apiKey,
         'X-BAPI-SIGN': signature,
         'X-BAPI-TIMESTAMP': timestamp,
-        'X-BAPI-RECV-WINDOW': '5000'
-      },
-      signal: controller.signal
+        'X-BAPI-RECV-WINDOW': recvWindow
+      }
     });
 
-    clearTimeout(timeout);
-
-    const status = response.status;
-    const statusText = response.statusText;
-    const hdrs = {};
-    for (const [k, v] of response.headers.entries()) hdrs[k] = v;
-    const text = await response.text();
-
-    return res.status(200).json({
-      ok: response.ok,
-      httpStatus: status,
-      httpStatusText: statusText,
-      key_masked: maskKey(apiKey),
-      bybit_url: url,
-      response_headers: hdrs,
-      response_body_raw: text === '' ? '(empty string)' : text
-    });
-  } catch (err) {
-    const msg = (err && err.name === 'AbortError') ? 'Gateway Timeout: Bybit timed out' : (err instanceof Error ? err.message : String(err));
-    return res.status(502).json({ ok: false, error: msg });
-  }
-});
-
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
-
-// Proxy público de mercado
-app.get('/api/bybit-proxy', async (req, res) => {
-  try {
-    const symbol = req.query.symbol;
-    let url = 'https://api.bybit.com/v5/market/tickers?category=linear';
-    if (symbol) url += `&symbol=${encodeURIComponent(String(symbol))}`;
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: { 'User-Agent': 'TradingBotDashboard/1.0', 'Accept': 'application/json' },
-      signal: controller.signal
-    });
-
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      const body = await response.text();
-      return res.status(response.status).json({ message: `Bybit returned ${response.status}`, details: body });
+    const dataText = await response.text().catch(() => null);
+    let parsed;
+    try {
+      parsed = dataText ? JSON.parse(dataText) : null;
+    } catch (e) {
+      parsed = { raw: dataText };
     }
 
-    const data = await response.json();
-    return res.status(200).json(data);
+    // Only include sensitive debug fields when DEBUG_BYBIT=true
+    const debugFields = debugEnabled ? { signed_string: prehash, signature } : {};
+
+    return res.status(200).json(Object.assign({
+      ok: response.ok,
+      httpStatus: response.status,
+      key_masked: maskKey(apiKey),
+      bybit_url: url,
+      accountType,
+      response: parsed
+    }, debugFields));
   } catch (err) {
-    const msg = (err && err.name === 'AbortError') ? 'Gateway Timeout: Bybit timed out' : (err instanceof Error ? err.message : String(err));
-    return res.status(502).json({ message: 'Failed to contact Bybit API', details: msg });
+    return res.status(502).json({
+      ok: false,
+      error: err.message,
+      stack: err.stack
+    });
   }
 });
 
-// Serve static files from dist/ (build output)
-const distDir = path.join(process.cwd(), 'dist');
-app.use(express.static(distDir));
-
-// SPA fallback
-app.get('*', (req, res) => {
-  res.sendFile(path.join(distDir, 'index.html'), err => {
-    if (err) res.status(500).send('Index file not found. Run build first.');
-  });
+// Start server
+const port = process.env.PORT || 10000;
+app.listen(port, () => {
+  console.log(`Server listening on port ${port}`);
 });
-
-// Safe startup log (do not print secrets)
-console.log('BYBIT_KEY present?', !!getSecretVar('BYBIT_KEY'));
-console.log('BYBIT_SECRET present?', !!getSecretVar('BYBIT_SECRET'));
-
-app.listen(port, () => console.log(`Server listening on port ${port}`));
