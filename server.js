@@ -35,36 +35,48 @@ app.get('/bybit-auth-debug', async (req, res) => {
     const apiSecret = getSecretVar('BYBIT_SECRET');
     if (!apiKey || !apiSecret) return res.status(400).json({ ok: false, error: 'BYBIT_KEY or BYBIT_SECRET not configured on server.' });
 
-    // Required param for this endpoint
-    const params = { accountType: 'UNIFIED' };
+    // Allow accountType override via query param, default to UNIFIED
+    const accountType = req.query.accountType || 'UNIFIED';
+    const params = { accountType };
 
     // Build request path and query string
-    const requestPath = '/v5/account/wallet-balance';
+    const endpointPath = '/v5/account/wallet-balance';
     const queryString = new URLSearchParams(params).toString();
 
-    // CORREÇÃO: String de assinatura SEM o '?' 
+    // Build prehash: timestamp + httpMethod + endpointPath + queryString (no '?')
     const timestamp = Date.now().toString();
-    const method = 'GET';
-    const prehash = timestamp + method + requestPath + queryString; // REMOVIDO o '?' e body
+    const httpMethod = 'GET';
+    const prehash = timestamp + httpMethod + endpointPath + queryString;
 
     // Create HMAC-SHA256 hex signature
     const signature = require('crypto').createHmac('sha256', apiSecret).update(prehash).digest('hex');
 
-    // CORREÇÃO: Construir URL com o '?' 
-    const url = `https://api-testnet.bybit.com${requestPath}?${queryString}`;
+    // Get base URL from env var, default to testnet
+    const baseUrl = getSecretVar('BYBIT_BASE_URL') || 'https://api-testnet.bybit.com';
+    
+    // Construct URL with '?' for the actual request
+    const url = `${baseUrl}${endpointPath}?${queryString}`;
 
-    // CORREÇÃO: Timeout aumentado para 10 segundos
+    // Check if debug mode is enabled
+    const debugMode = getSecretVar('DEBUG_BYBIT') === 'true';
+
+    // Log prehash if debug mode is enabled
+    if (debugMode) {
+      console.log('[DEBUG] Prehash string:', prehash);
+      console.log('[DEBUG] Signature:', signature);
+    }
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
 
     const response = await fetch(url, {
-      method,
+      method: httpMethod,
       headers: {
         'Content-Type': 'application/json',
         'X-BAPI-API-KEY': apiKey,
         'X-BAPI-SIGN': signature,
         'X-BAPI-TIMESTAMP': timestamp,
-        'X-BAPI-RECV-WINDOW': '10000' // Aumentado para 10 segundos
+        'X-BAPI-RECV-WINDOW': '10000'
       },
       signal: controller.signal
     });
@@ -75,17 +87,24 @@ app.get('/bybit-auth-debug', async (req, res) => {
     for (const [k, v] of response.headers.entries()) hdrs[k] = v;
     const text = await response.text();
 
-    return res.status(200).json({
+    // Build response object
+    const responseData = {
       ok: response.ok,
       httpStatus: response.status,
       httpStatusText: response.statusText,
-      prehash,
-      signature,
       key_masked: maskKey(apiKey),
       bybit_url: url,
       response_headers: hdrs,
       response_body_raw: text === '' ? '(empty string)' : text
-    });
+    };
+
+    // Only include prehash and signature if DEBUG_BYBIT is true
+    if (debugMode) {
+      responseData.prehash = prehash;
+      responseData.signature = signature;
+    }
+
+    return res.status(200).json(responseData);
   } catch (err) {
     const msg = (err && err.name === 'AbortError') ? 'Gateway Timeout: Bybit timed out' : (err instanceof Error ? err.message : String(err));
     return res.status(502).json({ ok: false, error: msg });
@@ -94,12 +113,12 @@ app.get('/bybit-auth-debug', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// CORREÇÃO: Proxy público usando testnet
+// Proxy público usando BYBIT_BASE_URL (default testnet)
 app.get('/api/bybit-proxy', async (req, res) => {
   try {
     const symbol = req.query.symbol;
-    // ALTERADO para testnet
-    let url = 'https://api-testnet.bybit.com/v5/market/tickers?category=linear';
+    const baseUrl = getSecretVar('BYBIT_BASE_URL') || 'https://api-testnet.bybit.com';
+    let url = `${baseUrl}/v5/market/tickers?category=linear`;
     if (symbol) url += `&symbol=${encodeURIComponent(String(symbol))}`;
 
     const controller = new AbortController();
@@ -140,5 +159,7 @@ app.get('*', (req, res) => {
 // Safe startup logs (do NOT print secrets)
 console.log('BYBIT_KEY present?', !!getSecretVar('BYBIT_KEY'));
 console.log('BYBIT_SECRET present?', !!getSecretVar('BYBIT_SECRET'));
+console.log('BYBIT_BASE_URL:', getSecretVar('BYBIT_BASE_URL') || 'https://api-testnet.bybit.com (default)');
+console.log('DEBUG_BYBIT:', getSecretVar('DEBUG_BYBIT') === 'true' ? 'enabled' : 'disabled');
 
 app.listen(port, () => console.log(`Server listening on port ${port}`));
