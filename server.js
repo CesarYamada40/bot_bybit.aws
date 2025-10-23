@@ -29,7 +29,6 @@ function maskKey(k) {
 }
 
 // Debug route — TEMPORARY: returns prehash and signature for diagnosis.
-// KEEP this route placed BEFORE static serving and SPA fallback.
 app.get('/bybit-auth-debug', async (req, res) => {
   try {
     const apiKey = getSecretVar('BYBIT_KEY');
@@ -37,25 +36,24 @@ app.get('/bybit-auth-debug', async (req, res) => {
     if (!apiKey || !apiSecret) return res.status(400).json({ ok: false, error: 'BYBIT_KEY or BYBIT_SECRET not configured on server.' });
 
     // Required param for this endpoint
-    const params = { accountType: 'UNIFIED' }; // adjust if you need SPOT/CONTRACT
+    const params = { accountType: 'UNIFIED' };
 
-    // Build request path WITH query string (IMPORTANT: include the '?' in the REQUEST_PATH used for prehash)
+    // Build request path and query string
     const requestPath = '/v5/account/wallet-balance';
-    const queryString = new URLSearchParams(params).toString(); // e.g. 'accountType=UNIFIED'
-    const requestPathWithQuery = queryString ? `${requestPath}?${queryString}` : requestPath;
+    const queryString = new URLSearchParams(params).toString();
 
-    // Prehash per Bybit v5 doc: TIMESTAMP + METHOD + REQUEST_PATH(+?query) + BODY
+    // CORREÇÃO: String de assinatura SEM o '?' 
     const timestamp = Date.now().toString();
     const method = 'GET';
-    const body = ''; // GET without body
-    const prehash = timestamp + method + requestPathWithQuery + body;
+    const prehash = timestamp + method + requestPath + queryString; // REMOVIDO o '?' e body
 
     // Create HMAC-SHA256 hex signature
     const signature = require('crypto').createHmac('sha256', apiSecret).update(prehash).digest('hex');
 
-    const url = `https://api-testnet.bybit.com${requestPathWithQuery}`;
+    // CORREÇÃO: Construir URL com o '?' 
+    const url = `https://api-testnet.bybit.com${requestPath}?${queryString}`;
 
-    // Perform request with short timeout
+    // CORREÇÃO: Timeout aumentado para 10 segundos
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
 
@@ -66,7 +64,7 @@ app.get('/bybit-auth-debug', async (req, res) => {
         'X-BAPI-API-KEY': apiKey,
         'X-BAPI-SIGN': signature,
         'X-BAPI-TIMESTAMP': timestamp,
-        'X-BAPI-RECV-WINDOW': '5000'
+        'X-BAPI-RECV-WINDOW': '10000' // Aumentado para 10 segundos
       },
       signal: controller.signal
     });
@@ -77,7 +75,6 @@ app.get('/bybit-auth-debug', async (req, res) => {
     for (const [k, v] of response.headers.entries()) hdrs[k] = v;
     const text = await response.text();
 
-    // Return prehash and signature FOR DEBUG (remove this route after diagnosis)
     return res.status(200).json({
       ok: response.ok,
       httpStatus: response.status,
@@ -97,11 +94,12 @@ app.get('/bybit-auth-debug', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// Public market proxy
+// CORREÇÃO: Proxy público usando testnet
 app.get('/api/bybit-proxy', async (req, res) => {
   try {
     const symbol = req.query.symbol;
-    let url = 'https://api.bybit.com/v5/market/tickers?category=linear';
+    // ALTERADO para testnet
+    let url = 'https://api-testnet.bybit.com/v5/market/tickers?category=linear';
     if (symbol) url += `&symbol=${encodeURIComponent(String(symbol))}`;
 
     const controller = new AbortController();
