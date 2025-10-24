@@ -79,7 +79,7 @@ app.get('/bybit-auth-debug', async (req, res) => {
     let prehash = `${timestamp}${httpMethod}${endpointPath}${queryString}`;
 
     // Se for necessário incluir recvWindow ou apiKey, ajuste conforme necessário:
-    const recvWindow = process.env.BYBIT_RECV_WINDOW || '10000';
+    const recvWindow = process.env.BYBIT_RECV_WINDOW || '5000';
     const includeRecv = process.env.BYBIT_INCLUDE_RECV_WINDOW === 'true';
     const includeApiKey = process.env.BYBIT_INCLUDE_APIKEY_IN_PREHASH === 'true';
 
