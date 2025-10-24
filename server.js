@@ -7,7 +7,7 @@ const fetch = global.fetch || require('node-fetch');
 const app = express();
 app.use(express.json());
 
-// Função para obter variáveis de ambiente (ou de arquivo de secrets)
+// Função para obter variáveis de ambiente
 function getSecretVar(name) {
   const raw = process.env[name];
   if (raw && raw.toString().trim()) return raw.toString().trim();
@@ -20,7 +20,7 @@ function getSecretVar(name) {
   return '';
 }
 
-// Função para mascarar chaves em logs/resposta
+// Função para mascarar chaves
 function maskKey(k) {
   if (!k) return '(not set)';
   return k.length > 8 ? `${k.slice(0,4)}...${k.slice(-4)}` : '****';
@@ -31,7 +31,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Proxy público (CORRIGIDO para testnet)
+// Proxy público (testnet)
 app.get('/api/bybit-proxy', async (req, res) => {
   try {
     const symbol = req.query.symbol || 'BTCUSDT';
@@ -44,7 +44,7 @@ app.get('/api/bybit-proxy', async (req, res) => {
   }
 });
 
-// Rota de debug para autenticação Bybit (testnet/mainnet configurable)
+// Rota de autenticação Bybit (VERSÃO SIMPLIFICADA)
 app.get('/bybit-auth-debug', async (req, res) => {
   try {
     const apiKey = getSecretVar('BYBIT_KEY');
@@ -53,97 +53,59 @@ app.get('/bybit-auth-debug', async (req, res) => {
     if (!apiKey || !apiSecret) {
       return res.status(400).json({
         ok: false,
-        error: 'BYBIT_KEY or BYBIT_SECRET not configured',
-        key_present: !!apiKey,
-        secret_present: !!apiSecret,
+        error: 'BYBIT_KEY or BYBIT_SECRET not configured'
       });
     }
 
-    // Timestamp em milissegundos (string)
+    // Timestamp em milissegundos
     const timestamp = Date.now().toString();
-    
-    // Valores hardcoded para evitar sobrescrita
-    const httpMethod = 'GET';
-    const endpointPath = '/v5/account/wallet-balance';
-
-    // Allow overriding accountType via query param for testing (UNIFIED by default)
-    const accountType = (req.query.accountType && String(req.query.accountType).toUpperCase()) || 'UNIFIED';
 
     // Parâmetros obrigatórios
+    const accountType = 'UNIFIED';
     const params = { accountType };
-
-    // Construir queryString
     const queryString = new URLSearchParams(params).toString();
 
-    // Declarar a string assinada
-    let prehash = `${timestamp}${httpMethod}${endpointPath}${queryString}`;
+    // CORREÇÃO: String de assinatura PADRÃO da Bybit
+    const prehash = timestamp + 'GET' + '/v5/account-wallet-balance' + queryString;
 
-    // Se for necessário incluir recvWindow ou apiKey, ajuste conforme necessário:
-    const recvWindow = process.env.BYBIT_RECV_WINDOW || '5000';
-    const includeRecv = process.env.BYBIT_INCLUDE_RECV_WINDOW === 'true';
-    const includeApiKey = process.env.BYBIT_INCLUDE_APIKEY_IN_PREHASH === 'true';
-
-    const prehashWithRecv = `${timestamp}${httpMethod}${endpointPath}${recvWindow}${queryString}`;
-    const prehashWithApiKeyRecv = `${timestamp}${apiKey}${recvWindow}${queryString}`;
-
-    // Atualizar a string assinada com base na configuração
-    if (includeApiKey) {
-      prehash = prehashWithApiKeyRecv;
-    } else if (includeRecv) {
-      prehash = prehashWithRecv;
+    // Debug (ativar com DEBUG_BYBIT=true)
+    if (process.env.DEBUG_BYBIT === 'true') {
+      console.log('Prehash:', prehash);
+      console.log('API Key (masked):', maskKey(apiKey));
     }
 
-    // Debug logs (ativos somente se DEBUG_BYBIT=true no env)
-    const debugEnabled = process.env.DEBUG_BYBIT === 'true';
-    if (debugEnabled) {
-      console.log('httpMethod:', httpMethod);
-      console.log('endpointPath:', endpointPath);
-      console.log('prehash:', prehash);
-    }
-
-    // Gerar assinatura HMAC-SHA256 hex
+    // Gerar assinatura
     const signature = crypto.createHmac('sha256', apiSecret).update(prehash).digest('hex');
 
-    // CORREÇÃO: Renomeado para bybitBaseUrl para evitar conflito
-    const bybitBaseUrl = process.env.BYBIT_BASE_URL || 'https://api-testnet.bybit.com';
-    const url = `${bybitBaseUrl}${endpointPath}?${queryString}`;
+    // Construir URL
+    const url = `https://api-testnet.bybit.com/v5/account-wallet-balance?${queryString}`;
 
-    // Fazer a requisição ao Bybit
+    // Fazer requisição
     const response = await fetch(url, {
-      method: httpMethod,
+      method: 'GET',
       headers: {
         'Content-Type': 'application/json',
         'X-BAPI-API-KEY': apiKey,
         'X-BAPI-SIGN': signature,
         'X-BAPI-TIMESTAMP': timestamp,
-        'X-BAPI-RECV-WINDOW': '5000'
+        'X-BAPI-RECV-WINDOW': '10000'
       }
     });
 
-    const dataText = await response.text().catch(() => null);
-    let parsed;
-    try {
-      parsed = dataText ? JSON.parse(dataText) : null;
-    } catch (e) {
-      parsed = { raw: dataText };
-    }
+    const data = await response.json();
 
-    // Only include sensitive debug fields when DEBUG_BYBIT=true
-    const debugFields = debugEnabled ? { signed_string: prehash, signature } : {};
-
-    return res.status(200).json(Object.assign({
+    return res.status(200).json({
       ok: response.ok,
       httpStatus: response.status,
       key_masked: maskKey(apiKey),
       bybit_url: url,
-      accountType,
-      response: parsed
-    }, debugFields));
+      prehash: process.env.DEBUG_BYBIT === 'true' ? prehash : undefined,
+      response: data
+    });
   } catch (err) {
     return res.status(502).json({
       ok: false,
-      error: err.message,
-      stack: err.stack
+      error: err.message
     });
   }
 });
