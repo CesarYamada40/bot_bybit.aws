@@ -20,6 +20,11 @@ function getSecretVar(name) {
   return '';
 }
 
+// Função para gerar um UUID (cdn-request-id)
+function generateCdnRequestId() {
+  return crypto.randomUUID(); // Gera um UUID único para cada requisição
+}
+
 // Função para mascarar chaves em logs/resposta
 function maskKey(k) {
   if (!k) return '(not set)';
@@ -59,10 +64,14 @@ app.get('/bybit-auth-debug', async (req, res) => {
       });
     }
 
+    // Gera o cdn-request-id
+    const cdnRequestId = generateCdnRequestId();
+
     // Timestamp em milissegundos (string)
     const timestamp = Date.now().toString();
     
     // Valores hardcoded para evitar sobrescrita
+    const recvWindow = '5000'; // Valor padrão
     const httpMethod = 'GET';
     const endpointPath = '/v5/account/wallet-balance';
 
@@ -71,40 +80,20 @@ app.get('/bybit-auth-debug', async (req, res) => {
 
     // Parâmetros obrigatórios
     const params = { accountType };
-
-    // Construir queryString
     const queryString = new URLSearchParams(params).toString();
 
     // Declarar a string assinada
-    let prehash = `${timestamp}${httpMethod}${endpointPath}${queryString}`;
-
-    // Se for necessário incluir recvWindow ou apiKey, ajuste conforme necessário:
-    const recvWindow = process.env.BYBIT_RECV_WINDOW || '5000';
-    const includeRecv = process.env.BYBIT_INCLUDE_RECV_WINDOW === 'true';
-    const includeApiKey = process.env.BYBIT_INCLUDE_APIKEY_IN_PREHASH === 'true';
-
-    const prehashWithRecv = `${timestamp}${httpMethod}${endpointPath}${recvWindow}${queryString}`;
-    const prehashWithApiKeyRecv = `${timestamp}${apiKey}${recvWindow}${queryString}`;
-
-    // Atualizar a string assinada com base na configuração
-    if (includeApiKey) {
-      prehash = prehashWithApiKeyRecv;
-    } else if (includeRecv) {
-      prehash = prehashWithRecv;
-    }
-
-    // Debug logs (ativos somente se DEBUG_BYBIT=true no env)
-    const debugEnabled = process.env.DEBUG_BYBIT === 'true';
-    if (debugEnabled) {
-      console.log('httpMethod:', httpMethod);
-      console.log('endpointPath:', endpointPath);
-      console.log('prehash:', prehash);
-    }
+    const prehash = `${timestamp}${apiKey}${recvWindow}${queryString}`;
 
     // Gerar assinatura HMAC-SHA256 hex
     const signature = crypto.createHmac('sha256', apiSecret).update(prehash).digest('hex');
 
-    // CORREÇÃO: Renomeado para bybitBaseUrl para evitar conflito
+    // Debug logs
+    console.log('cdn-request-id:', cdnRequestId);
+    console.log('String para assinar (prehash):', prehash);
+    console.log('Assinatura gerada (signature):', signature);
+
+    // Construção da URL
     const bybitBaseUrl = process.env.BYBIT_BASE_URL || 'https://api-testnet.bybit.com';
     const url = `${bybitBaseUrl}${endpointPath}?${queryString}`;
 
@@ -116,7 +105,8 @@ app.get('/bybit-auth-debug', async (req, res) => {
         'X-BAPI-API-KEY': apiKey,
         'X-BAPI-SIGN': signature,
         'X-BAPI-TIMESTAMP': timestamp,
-        'X-BAPI-RECV-WINDOW': '10000'
+        'X-BAPI-RECV-WINDOW': recvWindow,
+        'cdn-request-id': cdnRequestId, // Cabeçalho adicionado
       }
     });
 
@@ -128,17 +118,14 @@ app.get('/bybit-auth-debug', async (req, res) => {
       parsed = { raw: dataText };
     }
 
-    // Only include sensitive debug fields when DEBUG_BYBIT=true
-    const debugFields = debugEnabled ? { signed_string: prehash, signature } : {};
-
-    return res.status(200).json(Object.assign({
+    return res.status(200).json({
       ok: response.ok,
       httpStatus: response.status,
       key_masked: maskKey(apiKey),
       bybit_url: url,
       accountType,
       response: parsed
-    }, debugFields));
+    });
   } catch (err) {
     return res.status(502).json({
       ok: false,
